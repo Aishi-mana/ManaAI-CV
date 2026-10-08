@@ -1,0 +1,8 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+# Mana's personal data and big files stay out of git
+/data/
+*.gguf
+*.log

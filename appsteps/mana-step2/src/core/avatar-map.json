@@ -1,0 +1,16 @@
+{
+  "_help": "Edit this file to change which eye/mouth image each emotion uses. Names are file names without .png.",
+  "emotions": {
+    "neutral":     { "eyes": "eye_neutral",    "mouth": "mouth_neutral" },
+    "happy":       { "eyes": "eye_happy",      "mouth": "mouth_smile" },
+    "excited":     { "eyes": "eye_excited",    "mouth": "mouth_happy" },
+    "sad":         { "eyes": "eye_sad",        "mouth": "mouth_sad" },
+    "worried":     { "eyes": "eye_sad",        "mouth": "mouth_sad" },
+    "thinking":    { "eyes": "eye_thinking",   "mouth": "mouth_thinking" },
+    "surprised":   { "eyes": "eye_surprised",  "mouth": "mouth_surprised" },
+    "embarrassed": { "eyes": "eye_embarassed", "mouth": "mouth_smile" },
+    "sleepy":      { "eyes": "eye_sleepy",     "mouth": "mouth_neutral" }
+  },
+  "blink": { "half": "eye_half_closed", "closed": "eye_closed" },
+  "accessoriesBehindHair": ["glasses"]
+}
