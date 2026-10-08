@@ -6,3 +6,8 @@ src-tauri/gen
 /data/
 *.gguf
 *.log
+/assets
+*.png
+*.jpg
+*.jpeg
+/appsteps
