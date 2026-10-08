@@ -118,6 +118,11 @@ fn is_image(p: &Path) -> bool {
     )
 }
 
+/// The optional items.json in the avatar folder (item names and unlock rules).
+fn is_items_file(rel: &str) -> bool {
+    rel.eq_ignore_ascii_case("items.json")
+}
+
 fn collect_images(base: &Path, dir: &Path, out: &mut Vec<String>, depth: u32) {
     if depth > 6 {
         return;
@@ -129,9 +134,10 @@ fn collect_images(base: &Path, dir: &Path, out: &mut Vec<String>, depth: u32) {
         let p = entry.path();
         if p.is_dir() {
             collect_images(base, &p, out, depth + 1);
-        } else if is_image(&p) {
-            if let Ok(rel) = p.strip_prefix(base) {
-                out.push(rel.to_string_lossy().replace('\\', "/"));
+        } else if let Ok(rel) = p.strip_prefix(base) {
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if is_image(&p) || is_items_file(&rel) {
+                out.push(rel);
             }
         }
     }
@@ -157,7 +163,7 @@ async fn read_avatar_image(dir: String, rel: String) -> Result<tauri::ipc::Respo
         return Err("Invalid image path".into());
     }
     let path = PathBuf::from(&dir).join(&rel);
-    if !is_image(&path) {
+    if !is_image(&path) && !is_items_file(&rel) {
         return Err("Not an image file".into());
     }
     let bytes = std::fs::read(&path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;

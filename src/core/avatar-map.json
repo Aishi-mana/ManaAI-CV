@@ -1,5 +1,5 @@
 {
-  "_help": "Edit this file to change which eye/mouth image each emotion uses. Names are file names without .png.",
+  "_help": "Edit this file to change which eye/mouth image each emotion uses, which depth each accessory sits at, and the zoom presets. Names are file names without .png.",
   "emotions": {
     "neutral":     { "eyes": "eye_neutral",    "mouth": "mouth_neutral" },
     "happy":       { "eyes": "eye_happy",      "mouth": "mouth_smile" },
@@ -12,5 +12,15 @@
     "sleepy":      { "eyes": "eye_sleepy",     "mouth": "mouth_neutral" }
   },
   "blink": { "half": "eye_half_closed", "closed": "eye_closed" },
-  "accessoriesBehindHair": ["glasses"]
+  "_slots_help": "Accessory depths, bottom to top: back (behind everything), behind-body (above back hair, behind the body), behind-front-hair (above face, behind front hair), top (above everything, the default). An accessory can also get its depth just by living in accessories/<slot>/ ; entries below win over folders.",
+  "accessorySlots": {
+    "cat_ear_headset": "behind-front-hair",
+    "glasses": "behind-front-hair",
+    "cross_hairclip": "top"
+  },
+  "views": {
+    "full": { "label": "Full body", "scale": 1,   "y": 0 },
+    "half": { "label": "Half body", "scale": 1.8, "y": 0 },
+    "bust": { "label": "Bust",      "scale": 3,   "y": 0 }
+  }
 }

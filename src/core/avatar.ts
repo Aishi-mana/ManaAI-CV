@@ -1,26 +1,45 @@
 import { invoke } from "@tauri-apps/api/core";
 import mapData from "./avatar-map.json";
+import type { ItemCatalog } from "./progress";
 
 export type Vowel = "a" | "e" | "i" | "o" | "u";
 
 export const EMOTION_MAP = mapData.emotions as Record<string, { eyes: string; mouth: string }>;
 export const BLINK = mapData.blink as { half: string; closed: string };
-const BEHIND_HAIR = (mapData.accessoriesBehindHair as string[]).map((s) => s.toLowerCase());
+export const VIEWS = mapData.views as Record<string, { label: string; scale: number; y: number }>;
+
+/** Accessory depths, bottom to top. */
+export const SLOTS = ["back", "behind-body", "behind-front-hair", "top"] as const;
+export type AccessorySlot = (typeof SLOTS)[number];
+const SLOT_OVERRIDE = (mapData.accessorySlots ?? {}) as Record<string, string>;
+const isSlot = (s: string): s is AccessorySlot => (SLOTS as readonly string[]).includes(s);
 
 export interface AvatarAssets {
   /** Relative paths with forward slashes, e.g. "eyes/eye_happy.png" */
   files: string[];
   /** lowercase relative path -> blob URL */
   urls: Map<string, string>;
+  /** from items.json (names and unlock rules); empty if the file doesn't exist */
+  items: ItemCatalog;
+  itemsError?: string;
 }
 
 export interface AvatarConfig {
+  skin: string;
   hairstyle: string;
   outfit: string;
   accessories: string[];
+  view: string;
+}
+
+export interface Accessory {
+  name: string;
+  rel: string;
+  slot: AccessorySlot;
 }
 
 export interface AvatarOptions {
+  skins: string[];
   hairstyles: string[];
   outfits: string[];
   accessories: string[];
@@ -34,7 +53,7 @@ export interface Layer {
   variant: string;
 }
 
-export const DEFAULT_AVATAR: AvatarConfig = { hairstyle: "default", outfit: "default", accessories: [] };
+export const DEFAULT_AVATAR: AvatarConfig = { skin: "default", hairstyle: "default", outfit: "default", accessories: [], view: "full" };
 const CONFIG_KEY = "mana.avatar.v1";
 
 export function loadAvatarConfig(): AvatarConfig {
@@ -64,18 +83,30 @@ function mimeFor(rel: string): string {
   return "image/png";
 }
 
-/** Reads every image in the avatar folder through the Rust side and turns it into a blob URL. */
+/** Reads every image (and items.json) in the avatar folder through the Rust side. */
 export async function loadAvatarAssets(dir: string): Promise<AvatarAssets> {
   const files = await invoke<string[]>("scan_avatar", { dir });
   const urls = new Map<string, string>();
+  let items: ItemCatalog = {};
+  let itemsError: string | undefined;
   await Promise.all(
     files.map(async (rel) => {
       const data = await invoke<ArrayBuffer | number[]>("read_avatar_image", { dir, rel });
       const bytes = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer;
+      if (rel.toLowerCase() === "items.json") {
+        try {
+          const parsed = JSON.parse(new TextDecoder().decode(bytes));
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) items = parsed as ItemCatalog;
+          else itemsError = "items.json must be an object like { \"outfits/summer\": { ... } }";
+        } catch (e) {
+          itemsError = `items.json could not be read: ${e}`;
+        }
+        return;
+      }
       urls.set(rel.toLowerCase(), URL.createObjectURL(new Blob([bytes], { type: mimeFor(rel) })));
     }),
   );
-  return { files, urls };
+  return { files: files.filter((f) => f.toLowerCase() !== "items.json"), urls, items, itemsError };
 }
 
 export function revokeAssets(a: AvatarAssets) {
@@ -100,59 +131,102 @@ function filesIn(a: AvatarAssets, folder: string): string[] {
     .sort();
 }
 
+/**
+ * Every accessory with the depth it sits at. A depth comes from, in order:
+ * the accessorySlots table in avatar-map.json, the sub-folder it lives in
+ * (accessories/behind-body/wings.png), or "top".
+ */
+export function listAccessories(a: AvatarAssets): Accessory[] {
+  const out: Accessory[] = [];
+  for (const rel of a.files) {
+    const p = rel.split("/");
+    if (p[0].toLowerCase() !== "accessories") continue;
+    let folderSlot: AccessorySlot | undefined;
+    if (p.length === 3) {
+      const f = p[1].toLowerCase();
+      if (!isSlot(f)) continue; // unknown sub-folder: ignore
+      folderSlot = f;
+    } else if (p.length !== 2) {
+      continue;
+    }
+    const name = stem(p[p.length - 1]);
+    const override = SLOT_OVERRIDE[name.toLowerCase()];
+    const slot: AccessorySlot = override && isSlot(override) ? override : (folderSlot ?? "top");
+    out.push({ name, rel, slot });
+  }
+  return out.sort((x, y) => x.name.localeCompare(y.name));
+}
+
 export function listOptions(a: AvatarAssets): AvatarOptions {
+  const skins = new Set<string>();
   const hairstyles = new Set<string>();
   const outfits = new Set<string>();
-  const accessories: string[] = [];
   for (const f of a.files) {
     const p = f.split("/");
     const top = p[0].toLowerCase();
-    if (top === "hairstyles" && p.length >= 3) hairstyles.add(p[1]);
+    if (top === "base") {
+      if (p.length === 2) skins.add("default"); // loose files in base/ are the default skin
+      else if (p.length >= 3) skins.add(p[1]);
+    } else if (top === "hairstyles" && p.length >= 3) hairstyles.add(p[1]);
     else if (top === "outfits" && p.length >= 3) outfits.add(p[1]);
-    else if (top === "accessories" && p.length === 2) accessories.push(stem(p[1]));
   }
-  return { hairstyles: Array.from(hairstyles), outfits: Array.from(outfits), accessories };
+  return {
+    skins: Array.from(skins),
+    hairstyles: Array.from(hairstyles),
+    outfits: Array.from(outfits),
+    accessories: listAccessories(a).map((x) => x.name),
+  };
 }
 
-/** Makes sure the saved choices still exist in the folder. */
-export function normalizeConfig(c: AvatarConfig, o: AvatarOptions): AvatarConfig {
-  return {
-    hairstyle: o.hairstyles.includes(c.hairstyle) ? c.hairstyle : (o.hairstyles[0] ?? c.hairstyle),
-    outfit: o.outfits.includes(c.outfit) ? c.outfit : (o.outfits[0] ?? c.outfit),
-    accessories: c.accessories.filter((n) => o.accessories.includes(n)),
-  };
+/** Files of one skin. "default" is the loose files in base/ (or base/default/). */
+export function skinFiles(a: AvatarAssets, skin: string): string[] {
+  if (skin.toLowerCase() === "default") return [...filesIn(a, "base"), ...filesIn(a, "base/default")];
+  return filesIn(a, `base/${skin}`);
+}
+
+/**
+ * Her body and outfit are required. If either is missing she is not drawn at all
+ * (instead of being drawn bare), and this explains why.
+ */
+export function requiredProblem(a: AvatarAssets, cfg: AvatarConfig): string | null {
+  if (skinFiles(a, cfg.skin).length === 0) return `Her base body is missing (looked for base/${cfg.skin === "default" ? "body.png" : cfg.skin}). I won't draw her without it.`;
+  if (filesIn(a, `outfits/${cfg.outfit}`).length === 0) return `Her outfit is missing (expected outfits/${cfg.outfit}/outfit.png), so I won't draw her.`;
+  return null;
 }
 
 /**
  * Bottom-to-top draw order:
- *   hair back, outfit back, body, outfit, mouths, eyes,
- *   accessories that sit behind the hair (glasses), hair front + extras (ahoge), other accessories
+ *   [back accessories] hair back, [behind-body accessories], outfit back, body, outfit,
+ *   mouths, eyes, [behind-front-hair accessories], hair front + extras (ahoge), [top accessories]
  */
 export function buildLayers(a: AvatarAssets, cfg: AvatarConfig): Layer[] {
+  if (requiredProblem(a, cfg)) return [];
   const out: Layer[] = [];
   const add = (rel: string, slot: Layer["slot"] = "static") => {
     const url = a.urls.get(rel.toLowerCase());
     if (url) out.push({ key: rel, url, slot, variant: stem(lastPart(rel)).toLowerCase() });
   };
-  const accessoryFile = (name: string) =>
-    filesIn(a, "accessories").find((f) => stem(lastPart(f)).toLowerCase() === name.toLowerCase());
+  const chosen = listAccessories(a).filter((x) => cfg.accessories.includes(x.name));
+  const addAccessories = (slot: AccessorySlot) => chosen.filter((x) => x.slot === slot).forEach((x) => add(x.rel));
 
   const hair = filesIn(a, `hairstyles/${cfg.hairstyle}`);
   const outfit = filesIn(a, `outfits/${cfg.outfit}`);
   const frontRank = (f: string) => (/front/i.test(lastPart(f)) ? 0 : 1);
 
+  addAccessories("back");
   hair.filter(isBehind).forEach((f) => add(f));
+  addAccessories("behind-body");
   outfit.filter(isBehind).forEach((f) => add(f));
-  filesIn(a, "base").forEach((f) => add(f));
+  skinFiles(a, cfg.skin).forEach((f) => add(f));
   outfit.filter((f) => !isBehind(f)).forEach((f) => add(f));
   filesIn(a, "mouth").forEach((f) => add(f, "mouth"));
   filesIn(a, "eyes").forEach((f) => add(f, "eyes"));
-
-  const behind = cfg.accessories.filter((n) => BEHIND_HAIR.includes(n.toLowerCase()));
-  const front = cfg.accessories.filter((n) => !BEHIND_HAIR.includes(n.toLowerCase()));
-  behind.forEach((n) => { const f = accessoryFile(n); if (f) add(f); });
-  hair.filter((f) => !isBehind(f)).sort((x, y) => frontRank(x) - frontRank(y) || x.localeCompare(y)).forEach((f) => add(f));
-  front.forEach((n) => { const f = accessoryFile(n); if (f) add(f); });
+  addAccessories("behind-front-hair");
+  hair
+    .filter((f) => !isBehind(f))
+    .sort((x, y) => frontRank(x) - frontRank(y) || x.localeCompare(y))
+    .forEach((f) => add(f));
+  addAccessories("top");
 
   return out;
 }

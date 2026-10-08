@@ -4,6 +4,7 @@ import type { AvatarAssets } from "./avatar";
 import { inTauri } from "./useLlama";
 
 export type AvatarStatus = "loading" | "ready" | "error";
+export type AvatarState = ReturnType<typeof useAvatarAssets>;
 
 /** Loads every image from the avatar folder (and reloads when the folder changes). */
 export function useAvatarAssets(dir: string) {

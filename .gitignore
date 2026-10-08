@@ -6,8 +6,9 @@ src-tauri/gen
 /data/
 *.gguf
 *.log
-/assets
-*.png
-*.jpg
-*.jpeg
-/appsteps
+
+# Your artwork. Delete this line if you WANT the avatar PNGs in the (public) repo.
+/assets/
+
+# Claude's versions.
+/appsteps/
