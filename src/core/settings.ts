@@ -1,3 +1,4 @@
+import { getData, setData } from "./persist";
 import type { Msg } from "./types";
 
 export interface Settings {
@@ -11,6 +12,16 @@ export interface Settings {
   userName: string;
   charName: string;
   avatarDir: string;
+  memoryEnabled: boolean;
+  reflectionEnabled: boolean;
+  initiativeEnabled: boolean;
+  initiativeFrequency: "rare" | "normal" | "often";
+  initiativeQuietStart: number;
+  initiativeQuietEnd: number;
+  initiativeWaitMin: number;
+  initiativeSound: boolean;
+  embedPath: string;
+  embedPort: number;
   systemPrompt: string;
 }
 
@@ -51,46 +62,34 @@ export const DEFAULT_SETTINGS: Settings = {
   userName: "Friend",
   charName: "Mana",
   avatarDir: "C:\\AI\\ManaAI-CV\\assets\\avatar",
+  memoryEnabled: true,
+  reflectionEnabled: true,
+  initiativeEnabled: true,
+  initiativeFrequency: "normal",
+  initiativeQuietStart: 23,
+  initiativeQuietEnd: 8,
+  initiativeWaitMin: 5,
+  initiativeSound: true,
+  embedPath: "",
+  embedPort: 8081,
   systemPrompt: DEFAULT_PROMPT,
 };
 
-const SETTINGS_KEY = "mana.settings.v1";
-const CHAT_KEY = "mana.chat.v1";
-
 export function loadSettings(): Settings {
-  try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-  } catch {
-    /* fall through to defaults */
-  }
-  return { ...DEFAULT_SETTINGS };
+  return { ...DEFAULT_SETTINGS, ...(getData<Partial<Settings>>("settings") ?? {}) };
 }
 
 export function saveSettings(s: Settings) {
-  try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
-  } catch {
-    /* ignore */
-  }
+  setData("settings", s);
 }
 
 export function loadChat(): Msg[] {
-  try {
-    const raw = localStorage.getItem(CHAT_KEY);
-    if (raw) return JSON.parse(raw) as Msg[];
-  } catch {
-    /* ignore */
-  }
-  return [];
+  const v = getData<Msg[]>("chat");
+  return Array.isArray(v) ? v : [];
 }
 
 export function saveChat(msgs: Msg[]) {
-  try {
-    localStorage.setItem(CHAT_KEY, JSON.stringify(msgs.slice(-200)));
-  } catch {
-    /* ignore */
-  }
+  setData("chat", msgs.slice(-200));
 }
 
 /** Swap {{user}} / {{char}} placeholders for the current names. */

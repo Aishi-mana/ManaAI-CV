@@ -10,9 +10,11 @@ interface Props {
   charName: string;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** you are typing (so she won't interrupt) */
+  onActivity?: () => void;
 }
 
-export default function ChatPanel({ messages, busy, ready, charName, onSend, onStop }: Props) {
+export default function ChatPanel({ messages, busy, ready, charName, onSend, onStop, onActivity }: Props) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -68,6 +70,7 @@ export default function ChatPanel({ messages, busy, ready, charName, onSend, onS
                 {m.error && <div className="msg-error">{m.error}</div>}
               </div>
               {emotion && !busy && <span className="tag">{emotion}</span>}
+              {m.initiative && <span className="tag">{charName} started this</span>}
             </div>
           );
         })}
@@ -77,7 +80,10 @@ export default function ChatPanel({ messages, busy, ready, charName, onSend, onS
       <div className="composer">
         <textarea
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            onActivity?.();
+          }}
           onKeyDown={onKeyDown}
           rows={2}
           placeholder={ready ? `Message ${charName}  (Enter to send, Shift+Enter for a new line)` : "The model is not running yet"}

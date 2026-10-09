@@ -10,6 +10,8 @@ interface Props {
   charName: string;
   emotion: string | null;
   busy: boolean;
+  /** she asked you something and is waiting for your answer */
+  waiting?: boolean;
   speech: Speech | null;
   avatar: AvatarState;
   cfg: AvatarConfig;
@@ -17,7 +19,7 @@ interface Props {
   onOpenWardrobe: () => void;
 }
 
-export default function StagePanel({ charName, emotion, busy, speech, avatar, cfg, onCfg, onOpenWardrobe }: Props) {
+export default function StagePanel({ charName, emotion, busy, waiting, speech, avatar, cfg, onCfg, onOpenWardrobe }: Props) {
   const { assets, status, error, reload } = avatar;
   const layers = useMemo(() => (assets ? buildLayers(assets, cfg) : []), [assets, cfg]);
   const problem = assets ? requiredProblem(assets, cfg) : null;
@@ -70,7 +72,7 @@ export default function StagePanel({ charName, emotion, busy, speech, avatar, cf
   return (
     <aside className="stage" aria-label={`${charName}'s avatar area`}>
       <h1 className="stage-name">{charName}</h1>
-      <p className="stage-feel">{busy ? "typing..." : emotion ? `feeling ${emotion}` : "waiting for you"}</p>
+      <p className="stage-feel">{busy ? "typing..." : waiting ? "waiting for your answer..." : emotion ? `feeling ${emotion}` : "waiting for you"}</p>
 
       <div className="avatar-area">
         {status === "ready" && !problem && layers.length > 0 ? (

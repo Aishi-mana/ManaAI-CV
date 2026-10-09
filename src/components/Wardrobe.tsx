@@ -59,7 +59,7 @@ export default function Wardrobe({ data, cfg, stats, charName, itemsError, onCha
 
         <div className="drawer-body">
           <p className="progress-card">
-            Days together: <b>{stats.days.length}</b> &middot; Messages: <b>{stats.messages}</b> &middot; Coding level: <b>{stats.skill}</b>
+            Days together: <b>{stats.days.length}</b> &middot; Messages: <b>{stats.messages}</b> &middot; Bond: <b>{Math.floor(stats.bond)}</b> &middot; Coding level: <b>{stats.skill}</b>
           </p>
           {itemsError && <p className="msg-error">{itemsError}</p>}
 

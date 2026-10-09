@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { inTauri } from "./env";
 import type { Settings } from "./settings";
 import { checkHealth } from "./llm";
 
+export { inTauri };
+
 export type LlamaStatus = "stopped" | "starting" | "ready" | "error";
 
-/** True when running inside the Tauri window (false in a plain browser tab). */
-export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-/** Starts/stops llama-server through the Rust side and tracks when it is ready. */
+/**
+ * Starts/stops llama-server through the Rust side and tracks when it is ready.
+ * The chat model is required; the small embedding model (for memory search) is optional
+ * and starts alongside it when a path is set in Settings.
+ */
 export function useLlama(settings: Settings) {
   const [status, setStatus] = useState<LlamaStatus>("stopped");
   const [detail, setDetail] = useState("");
+  const [embedReady, setEmbedReady] = useState(false);
   const timer = useRef<number | null>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -35,10 +40,10 @@ export function useLlama(settings: Settings) {
         return;
       }
       if (inTauri) {
-        const running = await invoke<boolean>("llama_running");
+        const running = await invoke<boolean>("llama_running", { instance: "chat" });
         if (!running) {
           stopPolling();
-          const log = await invoke<string>("llama_log_tail");
+          const log = await invoke<string>("llama_log_tail", { instance: "chat" });
           setStatus("error");
           setDetail("llama-server stopped. Last lines of its log:\n\n" + log);
           return;
@@ -64,16 +69,34 @@ export function useLlama(settings: Settings) {
       setDetail("Loading the model onto your GPU...");
       try {
         await invoke("start_llama", {
+          instance: "chat",
           exePath: s.exePath,
           modelPath: s.modelPath,
           port: s.port,
           ctxSize: s.ctxSize,
           gpuLayers: s.gpuLayers,
+          extraArgs: ["--jinja"],
         });
       } catch (e) {
         setStatus("error");
         setDetail(String(e));
         return;
+      }
+      // Optional: the small embedding model, on the CPU. If it fails, memory just uses keyword search.
+      if (s.memoryEnabled && s.embedPath) {
+        try {
+          await invoke("start_llama", {
+            instance: "embed",
+            exePath: s.exePath,
+            modelPath: s.embedPath,
+            port: s.embedPort,
+            ctxSize: 2048,
+            gpuLayers: 0,
+            extraArgs: ["--embeddings"],
+          });
+        } catch {
+          /* optional */
+        }
       }
     } else {
       setStatus("starting");
@@ -85,14 +108,17 @@ export function useLlama(settings: Settings) {
   const stop = useCallback(async () => {
     stopPolling();
     if (inTauri) {
-      try {
-        await invoke("stop_llama");
-      } catch {
-        /* ignore */
+      for (const instance of ["chat", "embed"]) {
+        try {
+          await invoke("stop_llama", { instance });
+        } catch {
+          /* ignore */
+        }
       }
     }
     setStatus("stopped");
     setDetail("");
+    setEmbedReady(false);
   }, []);
 
   // On launch: adopt a server that is already up, or auto-start if enabled.
@@ -108,5 +134,24 @@ export function useLlama(settings: Settings) {
     return () => stopPolling();
   }, [start]);
 
-  return { status, detail, start, stop };
+  // Is the embedding server up? (checked every few seconds while it should be running)
+  useEffect(() => {
+    if (!settings.memoryEnabled || !settings.embedPath || status === "stopped") {
+      setEmbedReady(false);
+      return;
+    }
+    let alive = true;
+    const check = async () => {
+      const ok = (await checkHealth(settingsRef.current.embedPort)) === "ok";
+      if (alive) setEmbedReady(ok);
+    };
+    check();
+    const t = window.setInterval(check, 4000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, [settings.memoryEnabled, settings.embedPath, settings.embedPort, status]);
+
+  return { status, detail, start, stop, embedReady };
 }

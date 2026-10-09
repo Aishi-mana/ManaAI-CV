@@ -4,6 +4,10 @@ export interface Msg {
   /** Raw text exactly as the model produced it (includes the [emotion] tag). */
   content: string;
   error?: string;
+  /** when it was sent (ms). Older messages from before this existed have none. */
+  at?: number;
+  /** she started this conversation herself */
+  initiative?: boolean;
 }
 
 export interface ChatMessage {

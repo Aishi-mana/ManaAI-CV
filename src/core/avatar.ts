@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import mapData from "./avatar-map.json";
+import { getData, setData } from "./persist";
 import type { ItemCatalog } from "./progress";
 
 export type Vowel = "a" | "e" | "i" | "o" | "u";
@@ -54,24 +55,13 @@ export interface Layer {
 }
 
 export const DEFAULT_AVATAR: AvatarConfig = { skin: "default", hairstyle: "default", outfit: "default", accessories: [], view: "full" };
-const CONFIG_KEY = "mana.avatar.v1";
 
 export function loadAvatarConfig(): AvatarConfig {
-  try {
-    const raw = localStorage.getItem(CONFIG_KEY);
-    if (raw) return { ...DEFAULT_AVATAR, ...JSON.parse(raw) };
-  } catch {
-    /* ignore */
-  }
-  return { ...DEFAULT_AVATAR };
+  return { ...DEFAULT_AVATAR, ...(getData<Partial<AvatarConfig>>("avatar") ?? {}) };
 }
 
 export function saveAvatarConfig(c: AvatarConfig) {
-  try {
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(c));
-  } catch {
-    /* ignore */
-  }
+  setData("avatar", c);
 }
 
 // ---------------------------------------------------------------- loading

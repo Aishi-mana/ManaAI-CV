@@ -1,9 +1,11 @@
 // Progress tracking and unlock rules. No imports from the avatar code, so there are no cycles.
+import { getData, setData } from "./persist";
 
 export type Rule =
   | { type: "days"; value: number }
   | { type: "messages"; value: number }
   | { type: "skill"; value: number }
+  | { type: "bond"; value: number }
   | { type: "milestone"; id: string }
   | { type: "season"; months: number[] };
 
@@ -21,31 +23,36 @@ export interface Stats {
   /** distinct local dates (YYYY-MM-DD) on which you sent a message */
   days: string[];
   messages: number;
-  /** Mana's coding level. Nothing raises it yet; it arrives with her learning features. */
+  /** Mana's coding level: every 5 days you talk about coding or games raises it by 1. */
   skill: number;
+  /** how close you two are, 0-100 (grows with days spent together) */
+  bond: number;
+  lastBondDay: string | null;
+  /** days on which you talked about coding or games (every 5 raise her coding level) */
+  practiceDays: number;
+  lastPracticeDay: string | null;
   /** named achievements -> date earned */
   milestones: Record<string, string>;
 }
 
-export const EMPTY_STATS: Stats = { firstChat: null, days: [], messages: 0, skill: 0, milestones: {} };
-const STATS_KEY = "mana.stats.v1";
+export const EMPTY_STATS: Stats = {
+  firstChat: null,
+  days: [],
+  messages: 0,
+  skill: 0,
+  bond: 0,
+  lastBondDay: null,
+  practiceDays: 0,
+  lastPracticeDay: null,
+  milestones: {},
+};
 
 export function loadStats(): Stats {
-  try {
-    const raw = localStorage.getItem(STATS_KEY);
-    if (raw) return { ...EMPTY_STATS, ...JSON.parse(raw) };
-  } catch {
-    /* ignore */
-  }
-  return { ...EMPTY_STATS };
+  return { ...EMPTY_STATS, ...(getData<Partial<Stats>>("stats") ?? {}) };
 }
 
 export function saveStats(s: Stats) {
-  try {
-    localStorage.setItem(STATS_KEY, JSON.stringify(s));
-  } catch {
-    /* ignore */
-  }
+  setData("stats", s);
 }
 
 const dayKey = (d: Date) =>
@@ -76,6 +83,8 @@ export function ruleMet(rule: Rule, s: Stats, now: Date): boolean {
       return s.messages >= rule.value;
     case "skill":
       return s.skill >= rule.value;
+    case "bond":
+      return s.bond >= rule.value;
     case "milestone":
       return rule.id in s.milestones;
     case "season":
@@ -109,7 +118,9 @@ function describeRule(r: Rule, s: Stats, who: string): string {
     case "messages":
       return `Send ${r.value} ${r.value === 1 ? "message" : "messages"} (${Math.min(s.messages, r.value)}/${r.value})`;
     case "skill":
-      return `${who} reaches coding level ${r.value} (not available yet)`;
+      return `${who} reaches coding level ${r.value} (${Math.min(s.skill, r.value)}/${r.value})`;
+    case "bond":
+      return `Grow closer to ${who} (bond ${Math.min(Math.floor(s.bond), r.value)}/${r.value})`;
     case "milestone": {
       const names: Record<string, string> = {
         first_chat: "Say your first hello",

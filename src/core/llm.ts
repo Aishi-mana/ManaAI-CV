@@ -84,3 +84,32 @@ export async function streamChat(opts: {
     }
   }
 }
+
+/** One normal (non-streaming) reply, e.g. for writing memories. Returns the text. */
+export async function chatOnce(opts: {
+  port: number;
+  messages: ChatMessage[];
+  temperature?: number;
+  maxTokens?: number;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const res = await fetch(`http://127.0.0.1:${opts.port}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: opts.signal,
+    body: JSON.stringify({
+      messages: opts.messages,
+      stream: false,
+      temperature: opts.temperature ?? 0.2,
+      max_tokens: opts.maxTokens ?? 350,
+      chat_template_kwargs: { enable_thinking: false },
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Server error ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const json = await res.json();
+  const content = json?.choices?.[0]?.message?.content;
+  return typeof content === "string" ? content.replace(/<think>[\s\S]*?<\/think>/gi, "").trim() : "";
+}
