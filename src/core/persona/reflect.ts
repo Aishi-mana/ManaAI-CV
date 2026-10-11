@@ -70,9 +70,11 @@ export function applyDayToStats(st: Stats, s: DayStats, now: number): Stats {
   const today = dayKey(now);
   const newPractice = s.practice && st.lastPracticeDay !== today;
   const practiceDays = st.practiceDays + (newPractice ? 1 : 0);
+  const bond = Math.min(100, st.bond + bondGain(s, st.lastBondDay !== today));
   return {
     ...st,
-    bond: Math.min(100, st.bond + bondGain(s, st.lastBondDay !== today)),
+    bond,
+    bondPeak: Math.max(st.bondPeak, bond),
     lastBondDay: s.userMessages > 0 ? today : st.lastBondDay,
     practiceDays,
     lastPracticeDay: s.practice ? today : st.lastPracticeDay,

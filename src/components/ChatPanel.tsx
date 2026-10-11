@@ -70,7 +70,8 @@ export default function ChatPanel({ messages, busy, ready, charName, onSend, onS
                 {m.error && <div className="msg-error">{m.error}</div>}
               </div>
               {emotion && !busy && <span className="tag">{emotion}</span>}
-              {m.initiative && <span className="tag">{charName} started this</span>}
+              {m.initiative && !m.closing && <span className="tag">{charName} started this</span>}
+              {m.trimmed && <span className="tag">she got stuck, so I stopped her</span>}
             </div>
           );
         })}

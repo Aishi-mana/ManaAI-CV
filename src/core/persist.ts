@@ -13,7 +13,7 @@ import { inTauri } from "./env";
 
 export const DEFAULT_DATA_DIR = "C:\\AI\\ManaAI-CV\\data";
 const DIR_KEY = "mana.dataDir";
-const NAMES = ["settings", "chat", "stats", "avatar", "memory", "persona", "diary", "initiative"] as const;
+const NAMES = ["settings", "chat", "stats", "avatar", "memory", "persona", "diary", "initiative", "gpu"] as const;
 export type DataName = (typeof NAMES)[number];
 
 /** Where each file lived before the data folder existed (browser storage), for one-time migration. */
@@ -26,6 +26,7 @@ const LEGACY: Record<DataName, string> = {
   persona: "mana.data.persona",
   diary: "mana.data.diary",
   initiative: "mana.data.initiative",
+  gpu: "mana.data.gpu",
 };
 
 const cache = new Map<DataName, unknown>();

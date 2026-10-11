@@ -76,7 +76,7 @@ Reload with the **Reload images** button after editing `items.json`.
 
 Settings, chat history, your progress, her outfit and her memories are saved as small files in one data folder
 (default `C:\AI\ManaAI-CV\data`; change it in Settings, then restart): `settings.json`, `chat.json`, `stats.json`,
-`avatar.json`, `memory.json`, `persona.json`, `diary.json`, `initiative.json`. To back her up, copy the folder. Every save keeps the previous version as `.json.bak`.
+`avatar.json`, `memory.json`, `persona.json`, `diary.json`, `initiative.json`, `gpu.json`. To back her up, copy the folder. Every save keeps the previous version as `.json.bak`.
 The first time you start this version, anything you had saved before is moved in automatically.
 
 **How memory works.** Every few messages (or after a minute of quiet) the chat model reads the new part of the
@@ -137,6 +137,59 @@ time (default 5 minutes) she feels a little ignored (a small mood dip) and goes 
 until you reply.** If the window isn't in front, the taskbar button flashes, and a soft chime plays (both optional).
 Settings > Starting conversations has the controls, and **Let her start a chat now** to try it.
 Her openers are marked "started this" under the message and are not counted as something you said.
+
+**If you don't answer.** After the wait time, when you aren't typing or in a menu, she says one gentle line like
+"I guess you're busy, that's okay, I'll be here" (written by the model in her voice; a ready-made line is used if the
+model can't). She says it only once and then stays quiet until you reply.
+
+**Bond.** Whether you answered is remembered (the Mood tab shows how many you answered or left). When bond effects are on
+(Settings), answering raises the bond a little (+0.5, or +0.2 if you answered after she gave up) and leaving her
+unanswered lowers it a little (-0.5). Safety rails: it can never fall below the start of her current stage, and anything you
+unlocked with a `bond` rule stays unlocked even if the bond dips later (the highest bond ever reached is kept as `bondPeak`).
+The amounts are `BOND_REPLIED`, `BOND_LATE` and `BOND_IGNORED` in `src/core/initiative/policy.ts`.
+
+## GPU scheduler
+
+Your graphics card has 8 GB. The chat model uses about 6 of them, so the other big programs she will get (voice, drawing)
+can't all be loaded at once. The scheduler (**GPU** button in the top bar) decides who is loaded, and swaps them when needed.
+
+- **Residents.** Each big GPU program is a "resident" with a size, a priority and a rule for coming back. Today the chat model is
+  the only one (priority 100, comes back after being pushed out). Voice and drawing will register themselves when they exist.
+- **Leases.** Every request to the chat model (a reply, writing memories, her diary) holds a lease. A resident is never unloaded
+  while someone holds a lease, so a reply is never cut off. The chat model shows as **Parked** when it was unloaded on purpose.
+- **Making room.** If something needs room, the scheduler unloads the least important idle resident first. It uses your real free VRAM
+  (nvidia-smi) as well as its own bookkeeping, and always keeps the "memory to keep free" amount (Settings > GPU) for Windows.
+- **Fair.** Requests are served in order; one that arrives later can't keep a resident busy forever while an earlier one waits
+  to replace it. Several jobs for the same resident run together, and the chat model is brought back once, at the end.
+- **Safe.** If the scheduler can't help (model switched off, no room), chat requests simply run as before. If you press Stop
+  while she is parked, she is not restored.
+- **Measures instead of guessing.** After the model loads, it reads how much VRAM it really took (and how many layers went to the GPU)
+  and remembers that for this model/context/GPU-layers combination (`gpu.json`).
+- **What fits together.** The GPU window explains what fits next to the chat model. With an 8B model, voice does *not* fit
+  (it must stay loaded while she speaks, so swapping would be far too slow): the advice says how many GPU layers to move to the CPU
+  (a bit slower chat), or to use a smaller model. Drawing will swap: she parks the chat model, draws, and brings it back.
+- **Swap test.** Measures how long parking and reloading takes on your PC (nothing is drawn).
+
+For the code that will use this later: `scheduler.run("image", job)` loads what is needed, makes room, runs the job, and restores
+the chat model afterwards. `heavyAllowed()` in `src/core/gpu/plan.ts` says whether it is a good moment (not mid-reply, you've been idle).
+
+## Keeping her replies sane
+
+Chat models, especially small or heavily compressed ones, sometimes misbehave. Mana guards against the common cases:
+
+- **Loops.** Every chat request carries a repeat penalty and a "don't repeat sequences" sampler. If a reply still gets stuck
+  ("Manaaaaaaa...", "hey hey hey ..."), it is cut off right away (usually within about 15 characters of the loop starting)
+  instead of running to the limit, and the chat shows "she got stuck, so I stopped her". Loops are never fed back to the
+  model, so one bad reply can't teach the next. Old looped messages in your chat display short too.
+- **Name labels.** If she starts a reply with "Mana:" the label is removed (on display and when the chat is sent back to the model).
+  She also can't write the next line for you or herself (stop sequences).
+- **Whose name is whose.** Every reply carries a short rule: she is Mana, you are Aishi, and if you say "Hi Mana" she answers
+  "Hi Aishi!". This is added automatically, so it works with the character card you saved earlier.
+- **"I guess you're busy".** Written by the model as a separate short request and checked: no question, no "welcome back", not a
+  copy of what she said before, and it has to say she'll wait. If the model's line fails the check, a ready-made line is used.
+
+If one model still misbehaves (RPMax 12B at Q3_K_S did in testing), prefer a better-quality version of it (Q4_K_M or higher) or
+a different model. Lower "Creativity" in Settings can also help.
 
 ## Notes
 

@@ -27,6 +27,8 @@ export interface Stats {
   skill: number;
   /** how close you two are, 0-100 (grows with days spent together) */
   bond: number;
+  /** the highest the bond has ever been: bond-based unlocks use this, so earned items never re-lock */
+  bondPeak: number;
   lastBondDay: string | null;
   /** days on which you talked about coding or games (every 5 raise her coding level) */
   practiceDays: number;
@@ -41,6 +43,7 @@ export const EMPTY_STATS: Stats = {
   messages: 0,
   skill: 0,
   bond: 0,
+  bondPeak: 0,
   lastBondDay: null,
   practiceDays: 0,
   lastPracticeDay: null,
@@ -84,7 +87,7 @@ export function ruleMet(rule: Rule, s: Stats, now: Date): boolean {
     case "skill":
       return s.skill >= rule.value;
     case "bond":
-      return s.bond >= rule.value;
+      return Math.max(s.bond, s.bondPeak) >= rule.value;
     case "milestone":
       return rule.id in s.milestones;
     case "season":
@@ -120,7 +123,7 @@ function describeRule(r: Rule, s: Stats, who: string): string {
     case "skill":
       return `${who} reaches coding level ${r.value} (${Math.min(s.skill, r.value)}/${r.value})`;
     case "bond":
-      return `Grow closer to ${who} (bond ${Math.min(Math.floor(s.bond), r.value)}/${r.value})`;
+      return `Grow closer to ${who} (bond ${Math.min(Math.floor(Math.max(s.bond, s.bondPeak)), r.value)}/${r.value})`;
     case "milestone": {
       const names: Record<string, string> = {
         first_chat: "Say your first hello",

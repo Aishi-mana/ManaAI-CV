@@ -3,22 +3,26 @@ import ChatPanel from "./components/ChatPanel";
 import MemoryViewer from "./components/MemoryViewer";
 import SettingsDrawer from "./components/SettingsDrawer";
 import StagePanel from "./components/StagePanel";
+import GpuPanel from "./components/GpuPanel";
 import InnerLife from "./components/InnerLife";
 import Wardrobe from "./components/Wardrobe";
 import { loadAvatarConfig, saveAvatarConfig } from "./core/avatar";
 import type { AvatarConfig } from "./core/avatar";
-import { cleanReply } from "./core/emotion";
-import { buildPayload, streamChat } from "./core/llm";
+import { cleanReply, sanitizeForModel, setSpeakerNames } from "./core/emotion";
+import { useGpu } from "./core/gpu/useGpu";
+import { trimRunaway } from "./core/guard";
+import { buildPayload, chatOnce, streamChat } from "./core/llm";
 import { useMemory } from "./core/memory/useMemory";
 import { playChime, flashTaskbar } from "./core/initiative/signals";
 import { useInitiative } from "./core/initiative/useInitiative";
+import { CLOSING_LINES, closingTurn, isGoodClosing } from "./core/initiative/policy";
 import type { Plan } from "./core/initiative/policy";
 import { describeMood } from "./core/persona/mood";
 import { useInnerLife } from "./core/persona/useInnerLife";
 import { bootData, onPersistError } from "./core/persist";
 import type { BootResult } from "./core/persist";
 import { bumpMessage } from "./core/progress";
-import { fillTemplate, loadChat, loadSettings, saveChat, saveSettings } from "./core/settings";
+import { REPLY_RULES, fillTemplate, loadChat, loadSettings, saveChat, saveSettings } from "./core/settings";
 import type { Settings } from "./core/settings";
 import { uid } from "./core/types";
 import type { Msg } from "./core/types";
@@ -32,6 +36,7 @@ const STATUS_LABEL = {
   starting: "Loading",
   ready: "Ready",
   error: "Problem",
+  parked: "Parked",
 } as const;
 
 /** Loads everything from the data folder first, then shows the app. */
@@ -50,12 +55,14 @@ export default function App() {
 
 function MainApp({ boot }: { boot: BootResult }) {
   const [settings, setSettings] = useState<Settings>(loadSettings);
+  setSpeakerNames([settings.charName, settings.userName]); // so "Mana:" labels can be removed from her replies
   const [messages, setMessages] = useState<Msg[]>(loadChat);
   const [busy, setBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showWardrobe, setShowWardrobe] = useState(false);
   const [showMemories, setShowMemories] = useState(false);
   const [showInner, setShowInner] = useState(false);
+  const [showGpu, setShowGpu] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [savedCfg, setSavedCfg] = useState<AvatarConfig>(loadAvatarConfig);
   const [saveError, setSaveError] = useState("");
@@ -78,6 +85,7 @@ function MainApp({ boot }: { boot: BootResult }) {
   useEffect(() => onPersistError(setSaveError), []);
 
   const llama = useLlama(settings);
+  const gpu = useGpu(llama, settings);
   const avatar = useAvatarAssets(settings.avatarDir);
   const progress = useProgress(avatar.assets);
   const memory = useMemory(settings, llama.status === "ready", llama.embedReady);
@@ -106,8 +114,10 @@ function MainApp({ boot }: { boot: BootResult }) {
     memory,
     onIgnored: inner.noteIgnored,
     start: startInitiative,
+    close: startClosing,
+    updateStats: progress.update,
   });
-  drawerOpenRef.current = showSettings || showWardrobe || showMemories || showInner;
+  drawerOpenRef.current = showSettings || showWardrobe || showMemories || showInner || showGpu;
 
   // What she may wear right now (depends on what you two have unlocked), and what she IS wearing.
   const wardrobe = useMemo(
@@ -161,20 +171,36 @@ function MainApp({ boot }: { boot: BootResult }) {
     abortRef.current = ctrl;
     let acc = "";
     let failed = false;
+    let stuck = false;
 
     try {
       // What comes to mind (and the things she always remembers).
       const memoryBlock = await memory.recallFor(o.recallText, lastClean?.text ?? "");
-      const turns: Msg[] = o.tail ? [...o.history, { id: "hidden", role: "user", content: o.tail }] : o.history;
+      // Her earlier replies go back to the model without name labels or loops, so a bad reply can't teach the next one.
+      const past: Msg[] = o.history.map((m) => (m.role === "assistant" ? { ...m, content: sanitizeForModel(m.content) } : m));
+      const turns: Msg[] = o.tail ? [...past, { id: "hidden", role: "user", content: o.tail }] : past;
       await streamChat({
         port: settings.port,
         temperature: settings.temperature,
         signal: ctrl.signal,
-        messages: buildPayload(fillTemplate(settings.systemPrompt + memoryBlock + o.extraSystem, settings), turns),
+        // she can't write the next line for either of you
+        stop: [`\n${settings.userName}:`, `\n${settings.charName}:`],
+        messages: buildPayload(fillTemplate(settings.systemPrompt + REPLY_RULES + memoryBlock + o.extraSystem, settings), turns),
         onToken: (t) => {
+          if (stuck) return;
           acc += t;
+          // Stuck in a loop ("Manaaaaaa...", "hey hey hey ...")? Stop her right away and keep only the start.
+          const cut = trimRunaway(acc);
+          if (cut.runaway) {
+            stuck = true;
+            acc = cut.text;
+            ctrl.abort();
+          }
           const snapshot = acc;
-          setMessages((prev) => prev.map((m) => (m.id === o.botMsg.id ? { ...m, content: snapshot } : m)));
+          const flagged = stuck;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === o.botMsg.id ? { ...m, content: snapshot, ...(flagged ? { trimmed: true } : {}) } : m)),
+          );
         },
       });
     } catch (e) {
@@ -246,6 +272,37 @@ function MainApp({ boot }: { boot: BootResult }) {
     return ok;
   }
 
+  /** She gave up waiting for your answer and says "I guess you're busy" (once). */
+  async function startClosing(): Promise<boolean> {
+    if (busyRef.current || llama.status !== "ready") return false;
+    const lastHers = [...messagesRef.current].reverse().find((m) => m.role === "assistant");
+    const opener = lastHers ? cleanReply(lastHers.content).text : "";
+
+    // A short request of its own (not the whole chat), checked afterwards; a ready-made line is the fallback.
+    let content = "";
+    try {
+      const raw = await chatOnce({
+        port: settings.port,
+        temperature: 0.7,
+        maxTokens: 70,
+        messages: [
+          { role: "system", content: fillTemplate(settings.systemPrompt + REPLY_RULES + inner.promptBlock(), settings) },
+          { role: "user", content: closingTurn(settings.userName, opener) },
+        ],
+      });
+      if (isGoodClosing(cleanReply(raw).text, opener)) content = raw.trim();
+    } catch {
+      /* use a ready-made line */
+    }
+    if (!content) content = fillTemplate(CLOSING_LINES[Math.floor(Math.random() * CLOSING_LINES.length)], settings);
+
+    const now = Date.now();
+    setMessages((prev) => [...prev, { id: uid(), role: "assistant", content, at: now, initiative: true, closing: true }]);
+    inner.noteReply(cleanReply(content).emotion);
+    lastActivityRef.current = now;
+    return true;
+  }
+
   async function clearChat() {
     setConfirmClear(false);
     if (busy) return;
@@ -257,7 +314,7 @@ function MainApp({ boot }: { boot: BootResult }) {
     setMessages([]);
   }
 
-  const running = llama.status === "starting" || llama.status === "ready";
+  const running = llama.status === "starting" || llama.status === "ready" || llama.status === "parked";
   const freshAssets = avatar.assets;
 
   return (
@@ -278,6 +335,7 @@ function MainApp({ boot }: { boot: BootResult }) {
         <header className="topbar">
           <span className={`pill ${llama.status}`}>{STATUS_LABEL[llama.status]}</span>
           {memory.extracting && <span className="soft">Writing memories...</span>}
+          {gpu.busyText && <span className="soft">{gpu.busyText}</span>}
           <div className="spacer" />
           {running ? (
             <button className="btn" onClick={llama.stop}>
@@ -304,6 +362,9 @@ function MainApp({ boot }: { boot: BootResult }) {
           </button>
           <button className="btn" onClick={() => setShowInner(true)}>
             Mood &amp; diary
+          </button>
+          <button className="btn" onClick={() => setShowGpu(true)}>
+            GPU
           </button>
           <button className="btn" onClick={() => setShowSettings(true)}>
             Settings
@@ -389,8 +450,10 @@ function MainApp({ boot }: { boot: BootResult }) {
         />
       )}
 
+      {showGpu && <GpuPanel gpu={gpu} settings={settings} onClose={() => setShowGpu(false)} />}
+
       {showInner && (
-        <InnerLife api={inner} settings={settings} stats={progress.stats} ready={llama.status === "ready"} onClose={() => setShowInner(false)} />
+        <InnerLife api={inner} settings={settings} stats={progress.stats} ready={llama.status === "ready"} initiative={initiative.summary} onClose={() => setShowInner(false)} />
       )}
 
       {showMemories && (

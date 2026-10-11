@@ -5,7 +5,8 @@ import type { Mood, TraitMap } from "../persona/types";
 import { fillTemplate } from "../settings";
 import type { Settings } from "../settings";
 import type { Msg } from "../types";
-import { eligibility, initiativeTurn, normalizeState, pickPlan, recordStart } from "./policy";
+import type { Stats } from "../progress";
+import { applyOutcomeToStats, eligibility, initiativeTurn, normalizeState, pickPlan, recordOutcome, recordStart } from "./policy";
 import type { InitiativeState, Plan } from "./policy";
 
 const FAIL_BACKOFF_MS = 5 * 60_000;
@@ -27,6 +28,10 @@ export interface InitiativeDeps {
   onIgnored: () => void;
   /** generates and shows her message; returns true if she managed to say something */
   start: (plan: Plan, instruction: string) => Promise<boolean>;
+  /** she says "I guess you're busy" */
+  close: () => Promise<boolean>;
+  /** applies a change to the shared progress (bond) */
+  updateStats: (fn: (s: Stats) => Stats) => string[];
 }
 
 export type InitiativeStatus = "idle" | "waiting" | "gaveup";
@@ -47,7 +52,8 @@ export function useInitiative(deps: InitiativeDeps) {
     if (initial.waitingSince === null) return "idle";
     return Date.now() - initial.waitingSince >= deps.settings.initiativeWaitMin * 60_000 ? "gaveup" : "waiting";
   });
-  const gaveUpRef = useRef(status === "gaveup");
+  const gaveUpRef = useRef(status === "gaveup" || initial.closedAt !== null);
+  const [summary, setSummary] = useState({ answered: initial.answered, ignored: initial.ignored });
   const startingRef = useRef(false);
   const greetedRef = useRef(false);
   const failUntilRef = useRef(0);
@@ -55,6 +61,7 @@ export function useInitiative(deps: InitiativeDeps) {
 
   const commit = useCallback((next: InitiativeState) => {
     stateRef.current = next;
+    setSummary({ answered: next.answered, ignored: next.ignored });
     setData("initiative", next);
   }, []);
 
@@ -105,7 +112,12 @@ export function useInitiative(deps: InitiativeDeps) {
 
   /** You answered (or wrote something): she stops waiting. */
   const noteUserMessage = useCallback(() => {
-    if (stateRef.current.waitingSince !== null) commit({ ...stateRef.current, waitingSince: null });
+    const st = stateRef.current;
+    if (st.waitingSince !== null) {
+      const outcome = st.closedAt !== null || gaveUpRef.current ? "late" : "replied";
+      commit(recordOutcome(st, outcome, Date.now()));
+      if (depsRef.current.settings.initiativeBond) depsRef.current.updateStats((s) => applyOutcomeToStats(s, outcome));
+    }
     gaveUpRef.current = false;
     jitterRef.current = newJitter();
     setStatus("idle");
@@ -126,11 +138,23 @@ export function useInitiative(deps: InitiativeDeps) {
       const t = Date.now();
       const st = stateRef.current;
 
-      // waited long enough with no answer: she feels a little ignored, then stays quiet
-      if (st.waitingSince !== null && !gaveUpRef.current && t - st.waitingSince >= d.settings.initiativeWaitMin * 60_000) {
+      // Waited long enough with no answer: she feels a little ignored, says "I guess you're busy", then stays quiet.
+      // (Not while you are typing or in a menu: you may be about to answer.)
+      if (
+        st.waitingSince !== null &&
+        !gaveUpRef.current &&
+        t - st.waitingSince >= d.settings.initiativeWaitMin * 60_000 &&
+        !d.isBusy() &&
+        !d.drawerOpen() &&
+        t - d.lastInputAt() >= 60_000
+      ) {
         gaveUpRef.current = true;
         setStatus("gaveup");
         d.onIgnored();
+        commit(recordOutcome(st, "ignored", t));
+        if (d.settings.initiativeBond) d.updateStats((s) => applyOutcomeToStats(s, "ignored"));
+        if (d.settings.initiativeCloseOut && d.ready) void d.close();
+        return;
       }
       if (startingRef.current || t < failUntilRef.current) return;
 
@@ -160,7 +184,7 @@ export function useInitiative(deps: InitiativeDeps) {
     return () => window.clearInterval(timer);
   }, [begin, makePlan]);
 
-  return { status, noteUserMessage, triggerNow };
+  return { status, summary, noteUserMessage, triggerNow };
 }
 
 export type InitiativeApi = ReturnType<typeof useInitiative>;

@@ -1,13 +1,18 @@
 import { retrievability } from "../memory/strength";
 import type { Memory } from "../memory/types";
 import { dayKey } from "../persona/reflect";
+import { jaccard, tokens } from "../memory/text";
+import { stageOf } from "../persona/traits";
 import type { Mood, TraitMap } from "../persona/types";
+import type { Stats } from "../progress";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
 export type Frequency = "rare" | "normal" | "often";
 export type Kind = "followup" | "greet" | "miss" | "curious" | "share" | "timeofday";
+/** replied = you answered while she waited; late = after she gave up; ignored = she gave up waiting */
+export type Outcome = "replied" | "late" | "ignored";
 
 export interface Plan {
   kind: Kind;
@@ -25,10 +30,29 @@ export interface InitiativeState {
   /** memories she already followed up on (id -> when) */
   usedMemories: Record<string, number>;
   lastKinds: Kind[];
+  /** when she gave up waiting and said "I guess you're busy" (null while waiting, or after you reply) */
+  closedAt: number | null;
+  /** how many of her conversations you answered / left unanswered */
+  answered: number;
+  ignored: number;
+  /** the last 30 outcomes (for future stats) */
+  history: { at: number; kind: Kind; outcome: Outcome; secs?: number }[];
 }
 
 export function newState(): InitiativeState {
-  return { version: 1, lastAt: null, day: "", todayCount: 0, waitingSince: null, usedMemories: {}, lastKinds: [] };
+  return {
+    version: 1,
+    lastAt: null,
+    day: "",
+    todayCount: 0,
+    waitingSince: null,
+    usedMemories: {},
+    lastKinds: [],
+    closedAt: null,
+    answered: 0,
+    ignored: 0,
+    history: [],
+  };
 }
 
 export function normalizeState(raw: unknown): InitiativeState {
@@ -42,6 +66,10 @@ export function normalizeState(raw: unknown): InitiativeState {
     waitingSince: typeof r.waitingSince === "number" ? r.waitingSince : null,
     usedMemories: r.usedMemories && typeof r.usedMemories === "object" ? r.usedMemories : base.usedMemories,
     lastKinds: Array.isArray(r.lastKinds) ? r.lastKinds.slice(-5) : [],
+    closedAt: typeof r.closedAt === "number" ? r.closedAt : null,
+    answered: typeof r.answered === "number" ? r.answered : 0,
+    ignored: typeof r.ignored === "number" ? r.ignored : 0,
+    history: Array.isArray(r.history) ? r.history.slice(-30) : [],
   };
 }
 
@@ -172,6 +200,7 @@ export function recordStart(s: InitiativeState, plan: Plan, now: number): Initia
     day,
     todayCount: (s.day === day ? s.todayCount : 0) + 1,
     waitingSince: now,
+    closedAt: null,
     usedMemories: used,
     lastKinds: [...s.lastKinds, plan.kind].slice(-5),
   };
@@ -214,4 +243,72 @@ export function initiativeTurn(
       body = `${u} hasn't said anything for a while, so you start a new conversation yourself. Ask ${u} one new question to get to know them better. It must be something you don't already know from your memories. Keep it light and fun.`;
   }
   return `[${body} Speak in your usual voice. Write only 1 to 3 short sentences, ask exactly one question, and end with an emotion tag.]`;
+}
+
+// ---------------------------------------------------------------- what happened to her question
+
+/** Her conversation just ended: you answered, answered late, or never did. */
+export function recordOutcome(s: InitiativeState, outcome: Outcome, now: number): InitiativeState {
+  const kind = s.lastKinds[s.lastKinds.length - 1] ?? "curious";
+  const secs = s.waitingSince !== null ? Math.round((now - s.waitingSince) / 1000) : undefined;
+  const at = s.waitingSince ?? now;
+  if (outcome === "ignored") {
+    return {
+      ...s,
+      closedAt: now,
+      ignored: s.ignored + 1,
+      history: [...s.history, { at, kind, outcome, secs }].slice(-30),
+    };
+  }
+  // an answer (on time or late): she stops waiting
+  const history = [...s.history];
+  const last = history[history.length - 1];
+  if (outcome === "late" && last && last.at === at) history[history.length - 1] = { ...last, outcome: "late", secs };
+  else history.push({ at, kind, outcome, secs });
+  return { ...s, waitingSince: null, closedAt: null, answered: s.answered + 1, history: history.slice(-30) };
+}
+
+/** Bond points for each outcome. Tune these. */
+export const BOND_REPLIED = 0.5;
+export const BOND_LATE = 0.2;
+export const BOND_IGNORED = -0.5;
+
+/**
+ * How being answered (or not) changes the bond. A dip can never take her below the start of her
+ * current stage, and `bondPeak` keeps anything already unlocked unlocked.
+ */
+export function applyOutcomeToStats(st: Stats, outcome: Outcome): Stats {
+  const delta = outcome === "replied" ? BOND_REPLIED : outcome === "late" ? BOND_LATE : BOND_IGNORED;
+  const floor = delta < 0 ? stageOf(st.bond).stage.min : 0;
+  const bond = Math.min(100, Math.max(floor, st.bond + delta));
+  return { ...st, bond, bondPeak: Math.max(st.bondPeak, bond) };
+}
+
+// ---------------------------------------------------------------- "I guess you're busy"
+
+/** Used if the chat model can't write one. */
+export const CLOSING_LINES = [
+  "Ah, I guess you're busy right now, {{user}}... that's okay! I'll be here when you're free. [neutral]",
+  "Hehe, you must be busy~ no rush, {{user}}! You can tell me later, okay~ [happy]",
+  "Mm, I guess you're busy, {{user}}... I'll just wait for you! [worried]",
+];
+
+/** The hidden instruction for her closing line after you didn't answer. */
+export function closingTurn(userName: string, opener: string): string {
+  const said = opener.trim() ? ` ("${opener.trim().slice(0, 200)}")` : "";
+  return `[${userName} hasn't answered your last message yet${said}. Write ONE short, gentle sentence in your usual voice saying you guess ${userName} is busy right now and that you will be here whenever they are free. Do not ask a question. Do not repeat what you said before. Do not say they came back or are back. Do not complain or make ${userName} feel guilty. End with an emotion tag.]`;
+}
+
+/**
+ * Is the model's closing line usable? Small models sometimes ignore the instruction (ask the question again,
+ * say "welcome back"). If this says no, a ready-made line is used instead.
+ */
+export function isGoodClosing(text: string, previous: string): boolean {
+  const t = text.trim();
+  if (t.length < 8 || t.length > 240) return false;
+  if (/[?？]/.test(t)) return false; // no new question
+  if (/\bback\b/i.test(t)) return false; // "you're back", "welcome back": she is still waiting
+  if (!/\b(busy|later|wait(?:ing)?|here|free|no rush)\b/i.test(t)) return false; // must say the idea
+  if (jaccard(new Set(tokens(t)), new Set(tokens(previous))) > 0.5) return false; // not a copy of her last message
+  return true;
 }

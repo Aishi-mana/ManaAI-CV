@@ -14,6 +14,8 @@ interface Props {
   settings: Settings;
   stats: Stats;
   ready: boolean;
+  /** how many of her conversations you answered / left unanswered */
+  initiative?: { answered: number; ignored: number };
   onClose: () => void;
 }
 
@@ -29,7 +31,7 @@ function Meter({ label, value }: { label: string; value: number }) {
   );
 }
 
-export default function InnerLife({ api, settings, stats, ready, onClose }: Props) {
+export default function InnerLife({ api, settings, stats, ready, initiative, onClose }: Props) {
   const [tab, setTab] = useState<Tab>("mood");
   const name = settings.charName || "She";
   const { stage, next } = stageOf(stats.bond);
@@ -66,6 +68,11 @@ export default function InnerLife({ api, settings, stats, ready, onClose }: Prop
                 Bond: <b>{stage.label}</b> ({Math.floor(stats.bond)}
                 {next ? ` / ${next.min} for "${next.label}"` : ""})
               </p>
+              {initiative && initiative.answered + initiative.ignored > 0 && (
+                <p className="hint-soft">
+                  Conversations {name} started: you answered {initiative.answered}, and {initiative.ignored} went unanswered for a while.
+                </p>
+              )}
               <p className="hint-soft">
                 Her mood changes quickly: with the time of day, how long you have been away, and how the chat goes.
                 The bond only grows, a little for every day you spend together. Stages: {STAGES.map((s) => `${s.label} (${s.min})`).join(", ")}.

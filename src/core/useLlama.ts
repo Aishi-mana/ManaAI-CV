@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { inTauri } from "./env";
 import type { Settings } from "./settings";
-import { checkHealth } from "./llm";
+import { checkHealth, waitHealthy } from "./llm";
 
 export { inTauri };
 
-export type LlamaStatus = "stopped" | "starting" | "ready" | "error";
+/** "parked" = the GPU scheduler unloaded it on purpose (for a moment) and will bring it back */
+export type LlamaStatus = "stopped" | "starting" | "ready" | "error" | "parked";
 
 /**
  * Starts/stops llama-server through the Rust side and tracks when it is ready.
@@ -20,6 +21,8 @@ export function useLlama(settings: Settings) {
   const timer = useRef<number | null>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const stopPolling = () => {
     if (timer.current !== null) {
@@ -121,6 +124,29 @@ export function useLlama(settings: Settings) {
     setEmbedReady(false);
   }, []);
 
+  /** The scheduler unloads the model to free the GPU for something else. It comes back with unpark(). */
+  const park = useCallback(async () => {
+    stopPolling();
+    if (inTauri) {
+      for (const instance of ["chat", "embed"]) {
+        try {
+          await invoke("stop_llama", { instance });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    setStatus("parked");
+    setDetail("Resting for a moment while the GPU is busy with something else.");
+    setEmbedReady(false);
+  }, []);
+
+  /** Starts the model again and waits until it answers. Returns false if it didn't come back. */
+  const unpark = useCallback(async (): Promise<boolean> => {
+    await start();
+    return waitHealthy(settingsRef.current.port, 180_000, () => statusRef.current === "error");
+  }, [start]);
+
   // On launch: adopt a server that is already up, or auto-start if enabled.
   useEffect(() => {
     (async () => {
@@ -153,5 +179,5 @@ export function useLlama(settings: Settings) {
     };
   }, [settings.memoryEnabled, settings.embedPath, settings.embedPort, status]);
 
-  return { status, detail, start, stop, embedReady };
+  return { status, detail, start, stop, park, unpark, embedReady };
 }

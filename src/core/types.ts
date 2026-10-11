@@ -8,6 +8,10 @@ export interface Msg {
   at?: number;
   /** she started this conversation herself */
   initiative?: boolean;
+  /** her "I guess you're busy" after you didn't answer */
+  closing?: boolean;
+  /** she got stuck in a loop and was stopped */
+  trimmed?: boolean;
 }
 
 export interface ChatMessage {

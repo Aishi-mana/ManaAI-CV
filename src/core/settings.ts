@@ -20,6 +20,10 @@ export interface Settings {
   initiativeQuietEnd: number;
   initiativeWaitMin: number;
   initiativeSound: boolean;
+  initiativeCloseOut: boolean;
+  initiativeBond: boolean;
+  gpuReserveMB: number;
+  gpuAutoRestore: boolean;
   embedPath: string;
   embedPort: number;
   systemPrompt: string;
@@ -51,6 +55,14 @@ Example conversations:
 {{user}}: can you play a game with me?
 {{char}}: yes yes yes!! Pick one, I'll even let you win... maybe. Hehe. [happy]`;
 
+/**
+ * Always added after her character card (so it works even with an older saved card): keeps the two names straight,
+ * stops "Mana:" labels, and discourages loops.
+ */
+export const REPLY_RULES = `
+
+Reply rules: Your name is {{char}}. The person you are talking to is {{user}}. When {{user}} says "{{char}}", they are talking to you, so never call {{user}} "{{char}}" (if {{user}} says "Hi {{char}}", you answer "Hi {{user}}!"). Write only what {{char}} says, with no name label such as "{{char}}:" in front. Never repeat a word, sound or phrase many times in a row, and keep your reply to a few sentences.`;
+
 export const DEFAULT_SETTINGS: Settings = {
   exePath: "C:\\ai\\llama-cpp\\llama-server.exe",
   modelPath: "",
@@ -70,6 +82,10 @@ export const DEFAULT_SETTINGS: Settings = {
   initiativeQuietEnd: 8,
   initiativeWaitMin: 5,
   initiativeSound: true,
+  initiativeCloseOut: true,
+  initiativeBond: true,
+  gpuReserveMB: 1024,
+  gpuAutoRestore: true,
   embedPath: "",
   embedPort: 8081,
   systemPrompt: DEFAULT_PROMPT,

@@ -160,6 +160,19 @@ export default function SettingsDrawer({ settings, running, ready, onTestInitiat
             </p>
           )}
 
+          <h3>GPU</h3>
+
+          <div className="grid2">
+            <label className="field">
+              <span>Memory to keep free (MB)</span>
+              <input type="number" min={0} max={4096} step={128} value={d.gpuReserveMB} onChange={(e) => set("gpuReserveMB", Math.max(0, Number(e.target.value)))} />
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={d.gpuAutoRestore} onChange={(e) => set("gpuAutoRestore", e.target.checked)} />
+              <span>Bring the chat model back after something else used the GPU</span>
+            </label>
+          </div>
+
           <h3>Starting conversations</h3>
 
           <label className="check">
@@ -196,6 +209,14 @@ export default function SettingsDrawer({ settings, running, ready, onTestInitiat
               <span>Soft chime when she starts a chat</span>
             </label>
           </div>
+          <label className="check">
+            <input type="checkbox" checked={d.initiativeCloseOut} onChange={(e) => set("initiativeCloseOut", e.target.checked)} />
+            <span>If I don't answer, let her say "I guess you're busy"</span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={d.initiativeBond} onChange={(e) => set("initiativeBond", e.target.checked)} />
+            <span>Answering her raises the bond a little; leaving her unanswered lowers it a little</span>
+          </label>
           <p className="hint-soft">
             She only speaks up when you have been idle for a while and you are not in a menu, never during quiet hours, and she
             never sends a second message until you answer the first. Save first if you changed anything here.

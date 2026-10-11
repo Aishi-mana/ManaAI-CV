@@ -117,13 +117,65 @@ fn llama_running(state: tauri::State<LlamaState>, instance: String) -> bool {
 }
 
 #[tauri::command]
-fn llama_log_tail(instance: String) -> String {
+fn llama_log_tail(instance: String, max_bytes: Option<usize>) -> String {
     let Ok(instance) = clean_instance(&instance) else {
         return String::new();
     };
     let data = std::fs::read(log_path(&instance)).unwrap_or_default();
-    let start = data.len().saturating_sub(3000);
+    let keep = max_bytes.unwrap_or(3000).min(2_000_000);
+    let start = data.len().saturating_sub(keep);
     String::from_utf8_lossy(&data[start..]).to_string()
+}
+
+// ---------------------------------------------------------------- GPU
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GpuInfo {
+    name: String,
+    total_mb: u64,
+    used_mb: u64,
+    free_mb: u64,
+}
+
+/// Reads the NVIDIA GPU's memory with nvidia-smi (it comes with the driver).
+#[tauri::command]
+async fn gpu_info() -> Result<GpuInfo, String> {
+    let mut cmd = Command::new("nvidia-smi");
+    cmd.args([
+        "--query-gpu=name,memory.total,memory.used,memory.free",
+        "--format=csv,noheader,nounits",
+    ]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd.output().map_err(|e| format!("nvidia-smi is not available: {e}"))?;
+    if !out.status.success() {
+        return Err("nvidia-smi failed".into());
+    }
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let line = text.lines().next().ok_or("no GPU found")?.to_string();
+    let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+    if parts.len() < 4 {
+        return Err(format!("unexpected nvidia-smi output: {line}"));
+    }
+    let num = |s: &str| s.parse::<u64>().map_err(|_| format!("unexpected value: {s}"));
+    Ok(GpuInfo {
+        name: parts[0].to_string(),
+        total_mb: num(parts[1])?,
+        used_mb: num(parts[2])?,
+        free_mb: num(parts[3])?,
+    })
+}
+
+/// Size of a file in MB (used to estimate how much VRAM a model needs).
+#[tauri::command]
+async fn file_size_mb(path: String) -> Result<u64, String> {
+    std::fs::metadata(&path)
+        .map(|m| m.len() / (1024 * 1024))
+        .map_err(|e| format!("Could not read {path}: {e}"))
 }
 
 // ---------------------------------------------------------------- avatar images
@@ -248,7 +300,9 @@ pub fn run() {
             scan_avatar,
             read_avatar_image,
             data_read,
-            data_write
+            data_write,
+            gpu_info,
+            file_size_mb
         ])
         .build(tauri::generate_context!())
         .expect("error while building Mana")
